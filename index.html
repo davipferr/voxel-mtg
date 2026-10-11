@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Magic: The Gathering cards rebuilt in 3D voxels, with the art's subject popping out. Scryfall and Three.js." />
+    <title>Voxel MTG</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect x='3' y='1' width='10' height='14' fill='%23221b14'/><rect x='4' y='2' width='8' height='6' fill='%23d8b247'/><rect x='4' y='9' width='8' height='5' fill='%23e9dfb4'/><rect x='6' y='3' width='4' height='4' fill='%23e0543a'/></svg>" />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="backdrop"></div>
+    <canvas id="scene"></canvas>
+
+    <aside class="panel" id="dex">
+      <header>
+        <h1>Voxel MTG</h1>
+        <button id="collapse" class="icon" aria-label="Collapse the panel" title="Collapse">–</button>
+      </header>
+      <div class="body">
+        <form id="search-form" class="search" autocomplete="off">
+          <input id="search" type="search" list="card-names" placeholder="Card name…" aria-label="Search cards" />
+          <datalist id="card-names"></datalist>
+        </form>
+        <div class="nav">
+          <button id="prev" title="Previous in the set (←)">‹ Prev</button>
+          <button id="random" title="Random (R)">🎲 Random</button>
+          <button id="next" title="Next in the set (→)">Next ›</button>
+        </div>
+
+        <article id="entry" aria-live="polite">
+          <div class="title">
+            <h2 id="name">Loading…</h2>
+            <span id="mana" class="mana"></span>
+          </div>
+          <div id="type-line" class="muted"></div>
+          <div id="colors" class="pips"></div>
+          <div id="oracle" class="oracle"></div>
+          <p id="flavor-text" class="flavor" hidden></p>
+          <div id="stat" class="stat-box" hidden></div>
+          <button id="flip" hidden title="Turn the card over (T)">↻ Back face</button>
+
+          <div class="printing">
+            <a id="scryfall-link" target="_blank" rel="noopener" title="Open on Scryfall">
+              <img id="thumb" alt="" hidden />
+            </a>
+            <div>
+              <div id="set" class="small"></div>
+              <div id="artist" class="small muted"></div>
+              <a id="scryfall-more" class="small" target="_blank" rel="noopener">View on Scryfall ↗</a>
+            </div>
+          </div>
+          <p id="cutout-info" class="small" hidden></p>
+          <p id="voxel-info" class="muted small mono"></p>
+        </article>
+        <p class="legal muted">
+          Card data and images via <a href="https://scryfall.com" target="_blank" rel="noopener">Scryfall</a>. Magic: The Gathering
+          and its card art are © Wizards of the Coast. Unofficial fan content, not affiliated with or endorsed by Wizards.
+        </p>
+      </div>
+    </aside>
+
+    <aside class="panel" id="settings" hidden>
+      <h2>Settings</h2>
+      <label class="field">
+        <span>Layout</span>
+        <select data-setting="layout">
+          <option value="relief">Relief: the art pops out of the card</option>
+          <option value="summon">Summon: it stands on the card</option>
+        </select>
+      </label>
+      <label class="check"><input type="checkbox" data-setting="popOut" /> Cut out the art's subject</label>
+      <label class="field">
+        <span>Transition</span>
+        <select data-setting="transition">
+          <option value="explode">Explode and reassemble</option>
+          <option value="morph">Morph</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Detail <span class="muted">(card width in voxels)</span></span>
+        <input type="range" min="64" max="200" step="8" data-setting="detail" />
+      </label>
+      <label class="field">
+        <span>Inflation <span class="muted">(flat → round)</span></span>
+        <input type="range" min="0" max="1.5" step="0.05" data-setting="inflate" />
+      </label>
+      <label class="field">
+        <span>Random from <a class="muted" href="https://scryfall.com/docs/syntax" target="_blank" rel="noopener">(Scryfall search)</a></span>
+        <input type="text" data-setting="randomQuery" spellcheck="false" placeholder="e.g. t:dragon" />
+      </label>
+      <label class="check"><input type="checkbox" data-setting="autoRotate" /> Turntable <kbd>A</kbd></label>
+      <p class="muted small">
+        <kbd>←</kbd><kbd>→</kbd> browse the set · <kbd>R</kbd> random · <kbd>T</kbd> turn over · <kbd>L</kbd> layout ·
+        <kbd>B</kbd> burst · <kbd>/</kbd> search · <kbd>F</kbd> fullscreen. Click the card to poke it.
+      </p>
+      <p class="muted small">
+        The cutout runs in your browser: BRIA RMBG-1.4, a one-time download (88 MB with a GPU, 44 MB without), licensed for non-commercial use.
+      </p>
+    </aside>
+
+    <div id="top-buttons">
+      <button id="burst" class="round" aria-label="Burst (B)" title="Burst (B)">✸</button>
+      <button id="settings-toggle" class="round" aria-label="Settings" title="Settings">⚙</button>
+      <button id="fullscreen" class="round" aria-label="Fullscreen (F)" title="Fullscreen (F)">⛶</button>
+    </div>
+
+    <div id="loading" hidden aria-hidden="true"></div>
+    <div id="toast" role="status" aria-live="polite" hidden>
+      <span class="msg"></span>
+      <button class="icon" aria-label="Dismiss">×</button>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
