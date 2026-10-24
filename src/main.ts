@@ -14,8 +14,10 @@ import {
   type Card,
 } from './data/scryfall';
 import type { TransitionMode } from './scene/morph';
+import { SculptView } from './scene/sculpt';
 import { VoxelCloud } from './scene/voxels';
-import { cutout, hasCutout, onStatus, type Status } from './segment/cutout';
+import { sculptSubject } from './sculpt/mesh';
+import { cutout, depth, hasCutout, hasDepth, onStatus, type DepthMap, type Status, type Task } from './segment/cutout';
 import { Panel } from './ui/panel';
 import { bindSearch } from './ui/search';
 import { bindSettings, loadSettings, saveSettings } from './ui/settings';
@@ -89,6 +91,8 @@ scene.add(pedestal);
 
 const cloud = new VoxelCloud();
 scene.add(cloud.mesh);
+const sculpt = new SculptView();
+scene.add(sculpt.group);
 
 // ---------------------------------------------------------------------------
 // Camera framing
@@ -96,8 +100,10 @@ scene.add(cloud.mesh);
 
 const frameGoal = { target: new THREE.Vector3(0, 80, 0), distance: 330, radius: 70, active: false };
 
+type Bounds = Pick<VoxelModel, 'min' | 'max'>;
+
 /** Eases the camera to fit `model`, keeping the angle it's looking from. */
-function frame(model: VoxelModel): void {
+function frame(model: Bounds): void {
   const size = [model.max[0] - model.min[0], model.max[1] - model.min[1], model.max[2] - model.min[2]];
   const r = 0.5 * Math.hypot(size[0], size[1], size[2]);
   const fov = THREE.MathUtils.degToRad(camera.fov);
@@ -169,6 +175,8 @@ interface Current {
   cutout: Pixels | null;
   art: Rect;
   model: VoxelModel;
+  /** The art's depth, once there is one (sculpt only). */
+  depth: DepthMap | null;
 }
 let current: Current | null = null;
 let token = 0;
@@ -221,24 +229,25 @@ async function show(card: Card, face: number, mode: TransitionMode): Promise<voi
     const art = await findArt(f.image.card, f.image.art, front);
     const ready = settings.popOut && hasCutout(f.image.art);
     const cut = ready ? await cutout(f.image.art) : null;
+    const dep = sculpting() && hasDepth(f.image.art) ? await depth(f.image.art) : null;
     if (mine !== token) return;
 
     const model = build({ front, back, cutout: cut, art });
     cloud.show(model, mode);
     const first = !current;
-    current = { card, face, front, back, cutout: cut, art, model };
+    current = { card, face, front, back, cutout: cut, art, model, depth: dep };
 
     panel.render(card, face);
-    panel.voxels(model);
     panel.cutout(cut ? subjectNote(model) : '');
     applyAccent(card);
-    frame(model);
+    present(true);
     const hash = `#${card.set}/${card.collectorNumber}`;
     // Each card is a history entry, so Back returns to the last one; the very first replaces the bare URL.
     if (location.hash !== hash) history[first ? 'replaceState' : 'pushState'](null, '', hash);
     document.title = `${f.name} · Voxel MTG`;
 
     if (settings.popOut && !cut) void popOut(mine);
+    if (sculpting() && !dep) void measure(mine);
   } catch (err) {
     if (mine === token) toast(err instanceof Error ? err.message : String(err), 'error');
   } finally {
@@ -250,20 +259,89 @@ function subjectNote(model: VoxelModel): string {
   return model.subjectPixels ? '' : 'No single subject stood out in this art, so it stays flat.';
 }
 
-let modelStatus: Status = { state: 'idle' };
+/** The sculpt style wants depth: it's on, and there's a subject to shape. */
+const sculpting = () => settings.style === 'sculpt' && settings.popOut;
+
+const modelStatus: Record<Task, Status> = { cutout: { state: 'idle' }, depth: { state: 'idle' } };
 let cutting = false;
+let measuring = false;
+/** What the models are busy with: downloading, cutting out, estimating depth. Empty when idle. */
 function cutoutLine(): string {
-  if (!cutting) return '';
-  if (modelStatus.state === 'downloading' && modelStatus.loaded < modelStatus.total) {
-    const mb = (n: number) => (n / 1e6).toFixed(0);
-    return `Downloading the cutout model (once): ${mb(modelStatus.loaded)} / ${mb(modelStatus.total)} MB…`;
+  const mb = (n: number) => (n / 1e6).toFixed(0);
+  const jobs: [Task, boolean, string][] = [
+    ['cutout', cutting, 'Cutting the subject out of the art…'],
+    ['depth', measuring, 'Estimating how deep the art is…'],
+  ];
+  for (const [task, busy] of jobs) {
+    const s = modelStatus[task];
+    if (busy && s.state === 'downloading' && s.loaded < s.total) return `Downloading the ${task} model (once): ${mb(s.loaded)} / ${mb(s.total)} MB…`;
   }
-  return 'Cutting the subject out of the art…';
+  return jobs
+    .filter(([, busy]) => busy)
+    .map(([, , line]) => line)
+    .join(' ');
 }
-onStatus((s) => {
-  modelStatus = s;
-  if (cutting) panel.cutout(cutoutLine());
+onStatus((task, s) => {
+  modelStatus[task] = s;
+  if (cutting || measuring) panel.cutout(cutoutLine());
 });
+const deviceName = (task: Task) => {
+  const s = modelStatus[task];
+  return s.state === 'ready' ? ` on ${s.device === 'webgpu' ? 'the GPU' : 'the CPU'}` : '';
+};
+
+/** Shows the current card in the chosen style, frames it, and updates the stats line. */
+function present(grow: boolean): void {
+  if (!current) return;
+  const sculpted = settings.style === 'sculpt';
+  cloud.mesh.visible = !sculpted;
+  sculpt.group.visible = sculpted;
+  $('burst').hidden = sculpted;
+  if (!sculpted) {
+    panel.voxels(current.model);
+    frame(current.model);
+    return;
+  }
+  const { model, cutout: cut } = current;
+  sculpt.setCard(current.front, current.back, model.width, model.height, settings.layout);
+  // The subject waits for its depth, so it doesn't change shape a second later.
+  const mesh =
+    cut && current.depth && model.subjectPixels
+      ? sculptSubject(
+          { cutout: cut, depth: current.depth, art: current.art, cardWidth: model.width, cardHeight: model.height },
+          { layout: settings.layout, inflate: settings.inflate, depth: settings.depth },
+        )
+      : null;
+  sculpt.setSubject(mesh, cut, settings.layout, grow);
+  const b = sculpt.bounds();
+  panel.sculpt(sculpt.triangles, b);
+  frame(b);
+}
+
+/** Estimates the depth of the current card's art, then shapes the sculpt with it. */
+async function measure(mine: number): Promise<void> {
+  if (!current) return;
+  const f = current.card.faces[current.face];
+  if (!f.image) return;
+  measuring = true;
+  panel.cutout(cutoutLine());
+  const started = performance.now();
+  try {
+    const d = await depth(f.image.art);
+    if (mine !== token || !current) return;
+    measuring = false;
+    current.depth = d;
+    const seconds = ((performance.now() - started) / 1000).toFixed(1);
+    if (cutting) panel.cutout(cutoutLine());
+    else if (current.cutout) panel.cutout(current.model.subjectPixels ? `Cut out and measured in ${seconds} s${deviceName('depth')}.` : subjectNote(current.model));
+    if (settings.style === 'sculpt') present(true);
+  } catch (err) {
+    if (mine !== token) return;
+    measuring = false;
+    panel.cutout(cutoutLine());
+    toast(`Couldn't estimate the depth: ${err instanceof Error ? err.message : String(err)}`, 'error');
+  }
+}
 
 /** Cuts the current card's subject out, then raises it out of the card. */
 async function popOut(mine: number): Promise<void> {
@@ -280,8 +358,16 @@ async function popOut(mine: number): Promise<void> {
     current.cutout = cut;
     const model = build(current);
     const seconds = ((performance.now() - started) / 1000).toFixed(1);
-    const device = modelStatus.state === 'ready' ? ` on ${modelStatus.device === 'webgpu' ? 'the GPU' : 'the CPU'}` : '';
-    panel.cutout(model.subjectPixels ? `Cut out in ${seconds} s${device}.` : subjectNote(model));
+    if (measuring) panel.cutout(cutoutLine());
+    else panel.cutout(model.subjectPixels ? `Cut out in ${seconds} s${deviceName('cutout')}.` : subjectNote(model));
+
+    if (settings.style === 'sculpt') {
+      // The voxels change out of sight; the sculpt's subject grows once the depth is in too.
+      cloud.show(model, 'morph');
+      current.model = model;
+      present(true);
+      return;
+    }
 
     // Rise only from the bare card at rest, so every card voxel is where the new model expects it.
     await cloud.settled();
@@ -290,8 +376,7 @@ async function popOut(mine: number): Promise<void> {
     if (bare && model.subjectPixels) cloud.show(model, 'rise', riseStart(model));
     else cloud.show(model, 'morph');
     current.model = model;
-    panel.voxels(model);
-    frame(model);
+    present(false);
   } catch (err) {
     if (mine !== token) return;
     cutting = false;
@@ -307,11 +392,18 @@ function rebuild(): void {
   const model = build(current);
   cloud.show(model, 'morph');
   current.model = model;
-  panel.voxels(model);
   if (current.cutout) panel.cutout(subjectNote(model));
-  frame(model);
+  present(false);
   if (settings.popOut && !current.cutout) void popOut(token);
   else if (!settings.popOut) panel.cutout('');
+  if (sculpting() && !current.depth && !measuring) void measure(token);
+}
+
+/** Switches between sculpt and voxels. */
+function restyle(): void {
+  if (!current) return;
+  present(true);
+  if (sculpting() && !current.depth && !measuring) void measure(token);
 }
 
 async function load(fetchCard: () => Promise<Card>, notFound?: string): Promise<void> {
@@ -373,6 +465,8 @@ function flip(): void {
 const syncSettings = bindSettings($('settings'), settings, (key) => {
   if (key === 'autoRotate') controls.autoRotate = settings.autoRotate;
   else if (key === 'layout' || key === 'detail' || key === 'inflate' || key === 'popOut') rebuild();
+  else if (key === 'style') restyle();
+  else if (key === 'depth') present(false);
 });
 controls.autoRotate = settings.autoRotate;
 
@@ -384,7 +478,7 @@ $('prev').addEventListener('click', () => void step(-1));
 $('next').addEventListener('click', () => void step(1));
 $('random').addEventListener('click', () => void random());
 $('flip').addEventListener('click', flip);
-$('burst').addEventListener('click', () => current && cloud.show(current.model, 'explode'));
+$('burst').addEventListener('click', burst);
 $('settings-toggle').addEventListener('click', () => ($('settings').hidden = !$('settings').hidden));
 $('fullscreen').addEventListener('click', toggleFullscreen);
 $('collapse').addEventListener('click', () => {
@@ -392,6 +486,10 @@ $('collapse').addEventListener('click', () => {
   $('collapse').textContent = collapsed ? '+' : '–';
   updateViewOffset();
 });
+
+function burst(): void {
+  if (current && settings.style === 'voxels') cloud.show(current.model, 'explode');
+}
 
 function toggleFullscreen(): void {
   if (document.fullscreenElement) void document.exitFullscreen();
@@ -408,12 +506,17 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'arrowright') void step(1);
   else if (k === 'r') void random();
   else if (k === 't') flip();
-  else if (k === 'b' && current) cloud.show(current.model, 'explode');
+  else if (k === 'b') burst();
   else if (k === 'l') {
     settings.layout = settings.layout === 'relief' ? 'summon' : 'relief';
     syncSettings();
     saveSettings(settings);
     rebuild();
+  } else if (k === 'v') {
+    settings.style = settings.style === 'sculpt' ? 'voxels' : 'sculpt';
+    syncSettings();
+    saveSettings(settings);
+    restyle();
   } else if (k === 'a') {
     settings.autoRotate = controls.autoRotate = !settings.autoRotate;
     syncSettings();
@@ -439,7 +542,7 @@ canvas.addEventListener('pointerup', (e) => {
   if (!down) return;
   const click = Math.hypot(e.clientX - down.x, e.clientY - down.y) < 6 && performance.now() - down.t < 500;
   down = null;
-  if (!click) return;
+  if (!click || !cloud.mesh.visible) return;
   const hit = cloud.pick(rayFrom(e));
   if (hit) cloud.poke(hit);
 });
@@ -460,7 +563,7 @@ function onResize(): void {
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
   updateViewOffset();
-  if (current) frame(current.model);
+  if (current) frame(settings.style === 'sculpt' ? sculpt.bounds() : current.model);
 }
 window.addEventListener('resize', onResize);
 new ResizeObserver(updateViewOffset).observe($('dex'));
@@ -471,14 +574,15 @@ onResize();
 // ---------------------------------------------------------------------------
 
 if (parseHash(location.hash)) fromHash();
-else void load(() => cardByName('Shivan Dragon'));
+else void load(() => cardByName('Phenax, God of Deception'));
 
 function tick(dt: number): void {
   cloud.update(dt);
+  sculpt.update(dt);
   updateFraming(dt);
   controls.update(dt);
   if (hover) {
-    canvas.classList.toggle('pointer', cloud.pick(rayFrom(hover)) !== null);
+    canvas.classList.toggle('pointer', cloud.mesh.visible && cloud.pick(rayFrom(hover)) !== null);
     hover = null;
   }
   renderer.render(scene, camera);
@@ -493,4 +597,4 @@ renderer.setAnimationLoop((time) => {
 });
 
 // Dev only: lets a test harness step frames by hand (a hidden tab gets no animation frames).
-if (import.meta.env.DEV) Object.assign(window, { __dbg: { tick, cloud, camera, get current() { return current; } } });
+if (import.meta.env.DEV) Object.assign(window, { __dbg: { tick, cloud, sculpt, camera, get current() { return current; } } });

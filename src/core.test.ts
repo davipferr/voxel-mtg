@@ -5,6 +5,7 @@ import { planTransition, restingPlan, sampleAt, seed, snapshotOf, spatialOrder, 
 import { buildCard, insideCorners, riseStart } from './voxel/card';
 import { cleanMask, coverage, locateArt, resample, type Pixels } from './voxel/raster';
 import { distanceTransform, halfThickness, inflate } from './voxel/voxelize';
+import { sculpt } from './sculpt/mesh';
 
 /** An RGBA image from rows of characters: '.' is transparent, any other letter is an opaque colour. */
 function sprite(rows: string[], palette: Record<string, [number, number, number]> = {}): Pixels {
@@ -498,5 +499,66 @@ describe('Scryfall helpers', () => {
     });
     expect(c.twoSided).toBe(false);
     expect(c.faces.map((f) => f.image?.card)).toEqual(['giant.jpg', 'giant.jpg']);
+  });
+});
+
+describe('sculpt', () => {
+  /** A 40 × 40 image with an opaque disc in the middle. */
+  const disc = (): Pixels => {
+    const px = image(40, 40, () => [200, 100, 50]);
+    for (let y = 0; y < 40; y++) for (let x = 0; x < 40; x++) px.data[(y * 40 + x) * 4 + 3] = Math.hypot(x - 19.5, y - 19.5) < 14 ? 255 : 0;
+    return px;
+  };
+  const opts = { columns: 40, width: 40, height: 40, inflate: 1, depth: 1 };
+
+  it('makes a closed figure: every edge is shared by two triangles, wound opposite ways', () => {
+    const m = sculpt(disc(), null, { ...opts, oneSided: false });
+    expect(m.pixels).toBeGreaterThan(500);
+    const edges = new Map<string, number>();
+    for (let t = 0; t < m.indices.length; t += 3) {
+      for (let e = 0; e < 3; e++) {
+        const key = `${m.indices[t + e]} ${m.indices[t + ((e + 1) % 3)]}`;
+        edges.set(key, (edges.get(key) ?? 0) + 1);
+      }
+    }
+    for (const [key, n] of edges) {
+      expect(n).toBe(1);
+      const [a, b] = key.split(' ');
+      expect(edges.get(`${b} ${a}`)).toBe(1);
+    }
+  });
+
+  it('domes the middle and keeps the outline thin', () => {
+    const m = sculpt(disc(), null, { ...opts, oneSided: true });
+    let centre = 0;
+    let rim = Infinity;
+    for (let i = 0; i < m.positions.length; i += 3) {
+      const r = Math.hypot(m.positions[i] - 20, m.positions[i + 1] - 20);
+      if (r < 2) centre = Math.max(centre, m.positions[i + 2]);
+      if (r > 12.5 && m.positions[i + 2] > 0) rim = Math.min(rim, m.positions[i + 2]);
+    }
+    expect(centre).toBeGreaterThan(rim * 3);
+    expect(m.min[2]).toBe(0);
+  });
+
+  it('brings the parts the depth map sees as nearer forward', () => {
+    const depth = { width: 40, height: 40, data: new Float32Array(1600).map((_, i) => (i % 40 < 20 ? 1 : 0)) };
+    const m = sculpt(disc(), depth, { ...opts, oneSided: true });
+    let left = 0;
+    let right = 0;
+    for (let i = 0; i < m.positions.length; i += 3) {
+      const [x, y, z] = [m.positions[i], m.positions[i + 1], m.positions[i + 2]];
+      if (Math.abs(y - 20) < 2 && Math.abs(Math.abs(x - 20) - 8) < 1) {
+        if (x < 20) left = Math.max(left, z);
+        else right = Math.max(right, z);
+      }
+    }
+    expect(left).toBeGreaterThan(right + 2);
+  });
+
+  it('gives nothing for an empty cutout', () => {
+    const blank = image(20, 20, () => [0, 0, 0]);
+    for (let i = 3; i < blank.data.length; i += 4) blank.data[i] = 0;
+    expect(sculpt(blank, null, { ...opts, oneSided: false }).pixels).toBe(0);
   });
 });

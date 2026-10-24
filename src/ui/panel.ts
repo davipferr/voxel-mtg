@@ -96,6 +96,11 @@ export class Panel {
       (model.subjectPixels ? ` · subject from ${model.subjectPixels.toLocaleString('en-US')} pixels` : '');
   }
 
+  sculpt(triangles: number, b: { min: number[]; max: number[] }): void {
+    const size = `${Math.round(b.max[0] - b.min[0])}×${Math.round(b.max[1] - b.min[1])}×${Math.round(b.max[2] - b.min[2])}`;
+    this.q('#voxel-info').textContent = triangles ? `${triangles.toLocaleString('en-US')} triangles · ${size}` : `card only · ${size}`;
+  }
+
   /** The line about the cutout: progress, or why there's no subject. Empty hides it. */
   cutout(text: string): void {
     const p = this.q('#cutout-info');

@@ -31,7 +31,7 @@ in the repo settings.
 | | |
 |---|---|
 | <kbd>←</kbd> <kbd>→</kbd> | Previous / next card in the same set |
-| <kbd>R</kbd> | Random card, drawn from a Scryfall search (`t:creature` by default; change it in ⚙) |
+| <kbd>R</kbd> | Random card, drawn from a Scryfall search (`t:god` by default; change it in ⚙) |
 | <kbd>T</kbd> | Turn a double-faced card over |
 | <kbd>L</kbd> | Relief / Summon |
 | <kbd>B</kbd> | Burst: explode and reassemble |
@@ -54,6 +54,8 @@ The URL keeps the printing (`#fdn/763`), or takes a name (`#Shivan Dragon`), so 
 | Inflation | [src/voxel/voxelize.ts](src/voxel/voxelize.ts) | Same as voxel-pokedex: an exact Euclidean distance transform gives each pixel its distance to the outline, and the column height is `3·√(d − ½)`. Two-sided for Summon; one-sided (bulging towards the viewer only, a bit taller) for Relief. Only voxels with an exposed face are kept, and ambient occlusion is baked into the colours. |
 | Card model | [src/voxel/card.ts](src/voxel/card.ts) | The card slab with rounded corners (63 × 88 mm with 3.2 mm corners), then the subject. The card's voxels always come first, in the same order, and each subject voxel records the point on the card it comes from, which is what the rise animation needs. |
 | Rise | [src/scene/morph.ts](src/scene/morph.ts) | When the cutout arrives after the card is on screen, a `rise` transition pairs the two models voxel for voxel: the card stays put and the subject grows out of the art, the shortest trips first. |
+| Depth | [src/segment/worker.ts](src/segment/worker.ts) | Depth Anything V2 Small, run on the art crop in the same worker as the cutout (50 MB fp16 on WebGPU, 27 MB int8 otherwise). It gives relative depth: which parts of the picture are nearer, not how far. |
+| Sculpt | [src/sculpt/mesh.ts](src/sculpt/mesh.ts) | The default style (<kbd>V</kbd> switches to voxels). A smooth closed mesh on a grid twice as fine as the voxels: inflation for the thickness, plus the depth map bringing nearer parts forward. Outline cells with three corners inside get one triangle, so the edge isn't a staircase, and walls close the mesh. Painted with the full-resolution art. |
 | Rendering | [src/scene/voxels.ts](src/scene/voxels.ts) | One `InstancedMesh` of cubes, with every flight evaluated in the vertex shader from a single time uniform (see voxel-pokedex). |
 
 ## Licences

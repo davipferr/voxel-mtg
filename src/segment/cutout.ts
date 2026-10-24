@@ -1,34 +1,52 @@
 /**
- * Cuts the subject out of a card's art, using the segmentation worker. Results are memoised per art
- * URL for the session, so revisiting a card or changing a setting doesn't run the model again.
+ * Cuts the subject out of a card's art, and estimates the art's depth, using the model worker.
+ * Results are memoised per art URL for the session, so revisiting a card or changing a setting doesn't
+ * run a model again.
  */
 
-import type { Response } from './worker';
+import type { Response, Task } from './worker';
 import { loadPixels } from '../voxel/image';
 import { withAlpha, type Pixels } from '../voxel/raster';
+
+export type { Task };
 
 export type Status =
   | { state: 'idle' }
   | { state: 'downloading'; loaded: number; total: number }
   | { state: 'ready'; device: string };
 
-let worker: Worker | null = null;
-let nextId = 1;
-const pending = new Map<number, { resolve: (m: { width: number; height: number; mask: Uint8Array }) => void; reject: (e: Error) => void }>();
-const cache = new Map<string, Promise<Pixels>>();
-const done = new Set<string>();
-const listeners = new Set<(s: Status) => void>();
-let status: Status = { state: 'idle' };
-
-function setStatus(s: Status): void {
-  status = s;
-  for (const l of listeners) l(s);
+/** Relative inverse depth, one value per pixel, row-major from the top-left: larger is nearer. */
+export interface DepthMap {
+  width: number;
+  height: number;
+  data: Float32Array;
 }
 
-/** Calls `fn` with the model's status now and on every change. */
-export function onStatus(fn: (s: Status) => void): void {
+interface Raw {
+  width: number;
+  height: number;
+  data: Uint8Array | Float32Array;
+}
+
+let worker: Worker | null = null;
+let nextId = 1;
+const pending = new Map<number, { resolve: (r: Raw) => void; reject: (e: Error) => void }>();
+const cutouts = new Map<string, Promise<Pixels>>();
+const depths = new Map<string, Promise<DepthMap>>();
+const done: Record<Task, Set<string>> = { cutout: new Set(), depth: new Set() };
+const listeners = new Set<(task: Task, s: Status) => void>();
+const status: Record<Task, Status> = { cutout: { state: 'idle' }, depth: { state: 'idle' } };
+
+function setStatus(task: Task, s: Status): void {
+  status[task] = s;
+  for (const l of listeners) l(task, s);
+}
+
+/** Calls `fn` with each model's status now and on every change. */
+export function onStatus(fn: (task: Task, s: Status) => void): void {
   listeners.add(fn);
-  fn(status);
+  fn('cutout', status.cutout);
+  fn('depth', status.depth);
 }
 
 function getWorker(): Worker {
@@ -36,8 +54,8 @@ function getWorker(): Worker {
   worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
   worker.addEventListener('message', (e: MessageEvent<Response>) => {
     const msg = e.data;
-    if (msg.type === 'progress') setStatus({ state: 'downloading', loaded: msg.loaded, total: msg.total });
-    else if (msg.type === 'ready') setStatus({ state: 'ready', device: msg.device });
+    if (msg.type === 'progress') setStatus(msg.task, { state: 'downloading', loaded: msg.loaded, total: msg.total });
+    else if (msg.type === 'ready') setStatus(msg.task, { state: 'ready', device: msg.device });
     else if (msg.type === 'done') {
       pending.get(msg.id)?.resolve(msg);
       pending.delete(msg.id);
@@ -49,25 +67,44 @@ function getWorker(): Worker {
   return worker;
 }
 
+function run(task: Task, url: string): Promise<Raw> {
+  const id = nextId++;
+  return new Promise<Raw>((resolve, reject) => {
+    pending.set(id, { resolve, reject });
+    getWorker().postMessage({ id, task, url });
+  });
+}
+
 /** True when the cutout for `url` is already made, so asking for it won't keep anyone waiting. */
-export const hasCutout = (url: string) => done.has(url);
+export const hasCutout = (url: string) => done.cutout.has(url);
+/** True when the depth of `url` is already estimated. */
+export const hasDepth = (url: string) => done.depth.has(url);
 
 /** The art at `url` with the background made transparent. */
 export function cutout(url: string): Promise<Pixels> {
-  let p = cache.get(url);
+  let p = cutouts.get(url);
   if (!p) {
-    const id = nextId++;
-    const mask = new Promise<{ width: number; height: number; mask: Uint8Array }>((resolve, reject) => {
-      pending.set(id, { resolve, reject });
-      getWorker().postMessage({ id, url });
-    });
-    p = Promise.all([loadPixels(url), mask]).then(([art, m]) => {
+    p = Promise.all([loadPixels(url), run('cutout', url)]).then(([art, m]) => {
       if (m.width !== art.width || m.height !== art.height) throw new Error('The cutout came back the wrong size.');
-      done.add(url);
-      return withAlpha(art, m.mask);
+      done.cutout.add(url);
+      return withAlpha(art, m.data as Uint8Array);
     });
-    cache.set(url, p);
-    p.catch(() => cache.delete(url));
+    cutouts.set(url, p);
+    p.catch(() => cutouts.delete(url));
+  }
+  return p;
+}
+
+/** How near each pixel of the art at `url` is, at the art's own size. */
+export function depth(url: string): Promise<DepthMap> {
+  let p = depths.get(url);
+  if (!p) {
+    p = run('depth', url).then((d) => {
+      done.depth.add(url);
+      return { width: d.width, height: d.height, data: d.data as Float32Array };
+    });
+    depths.set(url, p);
+    p.catch(() => depths.delete(url));
   }
   return p;
 }

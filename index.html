@@ -63,6 +63,13 @@
     <aside class="panel" id="settings" hidden>
       <h2>Settings</h2>
       <label class="field">
+        <span>Style <kbd>V</kbd></span>
+        <select data-setting="style">
+          <option value="sculpt">Sculpt: a smooth model shaped by depth</option>
+          <option value="voxels">Voxels</option>
+        </select>
+      </label>
+      <label class="field">
         <span>Layout</span>
         <select data-setting="layout">
           <option value="relief">Relief: the art pops out of the card</option>
@@ -86,16 +93,21 @@
         <input type="range" min="0" max="1.5" step="0.05" data-setting="inflate" />
       </label>
       <label class="field">
+        <span>Depth <span class="muted">(sculpt: flat → deep)</span></span>
+        <input type="range" min="0" max="2" step="0.05" data-setting="depth" />
+      </label>
+      <label class="field">
         <span>Random from <a class="muted" href="https://scryfall.com/docs/syntax" target="_blank" rel="noopener">(Scryfall search)</a></span>
         <input type="text" data-setting="randomQuery" spellcheck="false" placeholder="e.g. t:dragon" />
       </label>
       <label class="check"><input type="checkbox" data-setting="autoRotate" /> Turntable <kbd>A</kbd></label>
       <p class="muted small">
-        <kbd>←</kbd><kbd>→</kbd> browse the set · <kbd>R</kbd> random · <kbd>T</kbd> turn over · <kbd>L</kbd> layout ·
+        <kbd>←</kbd><kbd>→</kbd> browse the set · <kbd>R</kbd> random · <kbd>T</kbd> turn over · <kbd>L</kbd> layout · <kbd>V</kbd> style ·
         <kbd>B</kbd> burst · <kbd>/</kbd> search · <kbd>F</kbd> fullscreen. Click the card to poke it.
       </p>
       <p class="muted small">
         The cutout runs in your browser: BRIA RMBG-1.4, a one-time download (88 MB with a GPU, 44 MB without), licensed for non-commercial use.
+        The sculpt's depth comes from Depth Anything V2 Small (Apache-2.0), another one-time download (50 MB with a GPU, 27 MB without).
       </p>
     </aside>
 

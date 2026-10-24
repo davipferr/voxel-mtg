@@ -6,7 +6,11 @@
 import type { TransitionMode } from '../scene/morph';
 import type { Layout } from '../voxel/card';
 
+export type Style = 'sculpt' | 'voxels';
+
 export interface Settings {
+  /** Smooth mesh shaped by the depth model, or voxels. */
+  style: Style;
   layout: Layout;
   /** Cut the subject out of the art and inflate it. */
   popOut: boolean;
@@ -14,18 +18,22 @@ export interface Settings {
   /** Card width in voxels. */
   detail: number;
   inflate: number;
+  /** How much the depth model shapes a sculpt: 0 = none, 1 = as estimated. */
+  depth: number;
   /** Scryfall search the random button draws from. */
   randomQuery: string;
   autoRotate: boolean;
 }
 
 export const DEFAULTS: Settings = {
+  style: 'sculpt',
   layout: 'relief',
   popOut: true,
   transition: 'explode',
   detail: 120,
   inflate: 1,
-  randomQuery: 't:creature',
+  depth: 1,
+  randomQuery: 't:god',
   autoRotate: true,
 };
 

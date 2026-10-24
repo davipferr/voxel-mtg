@@ -60,7 +60,7 @@ export const MIN_COVERAGE = 0.01;
 export const MAX_COVERAGE = 0.9;
 
 /** MTG cards are 63 × 88 mm with 3.2 mm corners. */
-const CORNER = 3.2 / 63;
+export const CORNER = 3.2 / 63;
 const BACK = [0.32, 0.22, 0.14];
 
 class Builder {
